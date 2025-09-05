@@ -1,4 +1,4 @@
-name: RDP-India
+name: main
 
 on:
   workflow_dispatch:
@@ -9,18 +9,16 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Enable Remote Desktop
         run: |
-          # Enable Remote Desktop
+          # Enable RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
-          # Disable Network Level Authentication
+          # Disable NLA
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
-
-          # Restart Remote Desktop service
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Secure Password
@@ -33,9 +31,9 @@ jobs:
               Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
           }
           $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 3
-          $rawPassword += $charSet.Lower | Get-Random -Count 3
-          $rawPassword += $charSet.Number | Get-Random -Count 3
+          $rawPassword += $charSet.Upper   | Get-Random -Count 3
+          $rawPassword += $charSet.Lower   | Get-Random -Count 3
+          $rawPassword += $charSet.Number  | Get-Random -Count 3
           $rawPassword += $charSet.Special | Get-Random -Count 3
           $password = -join ($rawPassword | Sort-Object { Get-Random })
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
@@ -79,12 +77,14 @@ jobs:
               exit 1
           }
 
-          # Restrict RDP firewall rule to Tailscale interface only
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          $iface = Get-NetAdapter | Where-Object {$_.InterfaceDescription -like "*Tailscale*"} | Select-Object -ExpandProperty InterfaceAlias
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 interface=$iface
-
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Restrict RDP Firewall
+        run: |
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389 localip=$env:TAILSCALE_IP
+          Write-Host "Firewall rule added for RDP on Tailscale IP: $env:TAILSCALE_IP"
 
       - name: Set Timezone to India
         run: |
