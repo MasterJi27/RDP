@@ -6,19 +6,14 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 3600
 
     steps:
-      - name: Enable Remote Desktop
+      - name: Configure Core RDP Settings
         run: |
-          # Enable RDP
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          # Disable NLA
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Secure Password
@@ -36,17 +31,13 @@ jobs:
           $rawPassword += $charSet.Number  | Get-Random -Count 3
           $rawPassword += $charSet.Special | Get-Random -Count 3
           $password = -join ($rawPassword | Sort-Object { Get-Random })
+
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
 
-          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-              New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-              Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          }
-
-          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
-          echo "::add-mask::$password"
 
       - name: Install Tailscale
         run: |
@@ -58,12 +49,7 @@ jobs:
 
       - name: Establish Tailscale Connection
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
-             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-             --hostname=gh-runner-$env:GITHUB_RUN_ID `
-             --accept-dns=false
-
-          # Get Tailscale IP
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -71,20 +57,13 @@ jobs:
               Start-Sleep -Seconds 5
               $retries++
           }
-
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-
+          if (-not $tsIP) { exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Restrict RDP Firewall
         run: |
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389 localip=$env:TAILSCALE_IP
-          Write-Host "Firewall rule added for RDP on Tailscale IP: $env:TAILSCALE_IP"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 remoteip=$env:TAILSCALE_IP
 
       - name: Set Timezone to India
         run: |
@@ -95,20 +74,18 @@ jobs:
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "✅ TCP connectivity successful!"
+          if (-not $testResult.TcpTestSucceeded) { exit 1 }
+          Write-Host "TCP connectivity successful!"
 
       - name: Maintain Connection
         run: |
           Write-Host "`n=== RDP ACCESS (INDIA) ==="
           Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Username: RDP"
           Write-Host "Password: $env:RDP_PASS"
-          Write-Host "===========================`n"
+          Write-Host "==================`n"
+
           while ($true) {
-              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RDP Active (IST)"
+              Write-Host "[$(Get-Date)] RDP Active (IST)"
               Start-Sleep -Seconds 300
           }
